@@ -14,7 +14,7 @@ local_time = datetime.now(local_tz)
 print("Aktuelle Zeit:", local_time.strftime('%Y-%m-%d %H:%M:%S'))
 
 app = Flask(__name__)
-app.secret_key = 'supergeheimespasswort'  # ändere das in etwas Sicheres
+app.secret_key = 'supergeheimespasswort'  # ändere das in etwas Sicheres (todo)
 
 # Konfiguration
 CLOUDFLARE_INI_PATH = "/etc/letsencrypt/cloudflare.ini"
