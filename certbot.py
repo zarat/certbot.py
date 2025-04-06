@@ -29,6 +29,7 @@ HTML_INDEX = """
   <li><a href="{{ url_for('request_certificate') }}">Zertifikat anfordern</a></li>
   <li><a href="{{ url_for('download_certificates') }}">Zertifikat herunterladen</a></li>
   <li><a href="{{ url_for('view_certificate_details') }}">Zertifikatsdetails anzeigen</a></li>
+  <li><a href="{{ url_for('revoke_certificate') }}">Zertifikat widerrufen</a></li>
 </ul>
 """
 
@@ -108,16 +109,43 @@ HTML_FORM_CERTIFICATE_DETAILS = """
 {% if certificate_details %}
   <h3>Details für {{ certificate_details['domain'] }} (UTC)</h3>
   <ul>
-    <!-- <li>Erstellungsdatum: {{ certificate_details['creation_date'] }}</li>
-    <li>Ablaufdatum: {{ certificate_details['expiration_date'] }}</li> -->
     <li>Gültig von: {{ certificate_details['valid_from'] }}</li>
     <li>Gültig bis: {{ certificate_details['valid_until'] }}</li>
-    <!-- <li>Aussteller: {{ certificate_details['issuer'] }}</li> -->
   </ul>
   {% if certificate_details['is_expired'] %}
     <p style="color: red; font-weight: bold;">Achtung: Dieses Zertifikat ist abgelaufen!</p>
   {% endif %}
 {% endif %}
+
+"""
+
+HTML_FORM_REVOKE = """
+<!doctype html>
+<title>Zertifikat widerrufen</title>
+<h2>Zertifikat widerrufen</h2>
+
+<a href="{{ url_for('index') }}">Zurück zum Index</a>
+<br><br>
+
+<form method=post action="{{ url_for('revoke_certificate') }}">
+  Domain:
+  <select name="domain">
+    {% for domain in domains %}
+      <option value="{{ domain }}">{{ domain }}</option>
+    {% endfor %}
+  </select><br><br>
+  <input type=submit value="Zertifikat widerrufen">
+</form>
+
+{% with messages = get_flashed_messages() %}
+  {% if messages %}
+    <ul style="color: red;">
+      {% for message in messages %}
+        <li>{{ message }}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+{% endwith %}
 
 """
 
@@ -208,21 +236,54 @@ def view_certificate_details():
 
     return render_template_string(HTML_FORM_CERTIFICATE_DETAILS, domains=domains, certificate_details=certificate_details)
 
+@app.route("/revoke_certificate", methods=["GET", "POST"])
+def revoke_certificate():
+    # Alle verfügbaren Domains abrufen
+    domains = [d for d in os.listdir(CERTBOT_PATH) if os.path.isdir(os.path.join(CERTBOT_PATH, d))]
+
+    if request.method == "POST":
+        domain = request.form.get("domain", "").strip()
+
+        if not domain:
+            flash("Bitte eine gültige Domain angeben.")
+            return redirect(url_for("revoke_certificate"))
+
+        cert_path = os.path.join(CERTBOT_PATH, domain, "fullchain.pem")
+
+        if not os.path.exists(cert_path):
+            flash("Zertifikate für diese Domain wurden noch nicht erstellt.")
+            return redirect(url_for("revoke_certificate"))
+
+        # Zertifikat widerrufen
+        certbot_command = [
+            "sudo", "certbot", "revoke",
+            "--cert-path", cert_path,
+            "--non-interactive",
+            "--no-delete-after-revoke"
+        ]
+
+        try:
+            result = subprocess.run(certbot_command, capture_output=True, text=True, check=True)
+            flash(f"Zertifikat für {domain} erfolgreich widerrufen.")
+        except subprocess.CalledProcessError as e:
+            flash(f"Fehler beim Widerrufen des Zertifikats: {e.stderr}")
+
+        return redirect(url_for("revoke_certificate"))
+
+    return render_template_string(HTML_FORM_REVOKE, domains=domains)
+
 def get_certificate_details(cert_path):
     """Extrahiere Details aus dem Zertifikat und prüfe, ob es abgelaufen ist"""
     with open(cert_path, 'rb') as cert_file:
         cert = crypto.load_certificate(crypto.FILETYPE_PEM, cert_file.read())
 
-    # Erstellungsdatum und Ablaufdatum extrahieren
     valid_from_utc = datetime.strptime(cert.get_notBefore().decode('utf-8'), "%Y%m%d%H%M%SZ")
     valid_until_utc = datetime.strptime(cert.get_notAfter().decode('utf-8'), "%Y%m%d%H%M%SZ")
 
     issuer = cert.get_issuer().CN
 
-    # Prüfen, ob das Zertifikat abgelaufen ist
-    is_expired = datetime.utcnow() > valid_until_utc  # Vergleicht die aktuelle UTC-Zeit mit dem Ablaufdatum
+    is_expired = datetime.utcnow() > valid_until_utc
 
-    # Formatierung der Details im UTC-Format
     details = {
         'domain': cert.get_subject().CN,
         'creation_date': valid_from_utc.strftime('%Y-%m-%d '),
@@ -230,7 +291,7 @@ def get_certificate_details(cert_path):
         'valid_from': valid_from_utc.strftime('%Y-%m-%d '),
         'valid_until': valid_until_utc.strftime('%Y-%m-%d '),
         'issuer': issuer,
-        'is_expired': is_expired  # Zeigt an, ob das Zertifikat abgelaufen ist
+        'is_expired': is_expired
     }
 
     return details
